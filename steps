@@ -1,0 +1,260 @@
+# Comprehensive Guide: Multi-Environment Kubernetes RBAC Setup
+
+## Part 1: AWS EKS Setup
+
+### Step 1: Create EKS Cluster
+```bash
+eksctl create cluster --name multi-env-cluster --region us-west-2 --nodegroup-name standard-workers --node-type t3.medium --nodes 3 --nodes-min 1 --nodes-max 4
+```
+
+### Step 2: Create Namespaces
+```bash
+kubectl create namespace dev
+kubectl create namespace test
+kubectl create namespace pre-prod
+kubectl create namespace production
+```
+
+### Step 3: Create IAM Groups
+```bash
+aws iam create-group --group-name eks-dev-team
+aws iam create-group --group-name eks-test-team
+aws iam create-group --group-name eks-pre-prod-team
+aws iam create-group --group-name eks-prod-team
+```
+
+### Step 4: Create IAM Users
+```bash
+aws iam create-user --user-name dev-user1
+aws iam create-user --user-name test-user1
+aws iam create-user --user-name pre-prod-user1
+aws iam create-user --user-name prod-user1
+```
+
+### Step 5: Add Users to Groups
+```bash
+aws iam add-user-to-group --user-name dev-user1 --group-name eks-dev-team
+aws iam add-user-to-group --user-name test-user1 --group-name eks-test-team
+aws iam add-user-to-group --user-name pre-prod-user1 --group-name eks-pre-prod-team
+aws iam add-user-to-group --user-name prod-user1 --group-name eks-prod-team
+```
+
+### Step 6: Create IAM Policies
+Create a file named `eks-dev-policy.json`:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "eks:DescribeCluster",
+                "eks:ListClusters"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+Create policies for each environment:
+```bash
+aws iam create-policy --policy-name eks-dev-policy --policy-document file://eks-dev-policy.json
+aws iam create-policy --policy-name eks-test-policy --policy-document file://eks-dev-policy.json
+aws iam create-policy --policy-name eks-pre-prod-policy --policy-document file://eks-dev-policy.json
+aws iam create-policy --policy-name eks-prod-policy --policy-document file://eks-dev-policy.json
+```
+
+### Step 7: Attach Policies to Groups
+```bash
+aws iam attach-group-policy --group-name eks-dev-team --policy-arn arn:aws:iam::ACCOUNT_ID:policy/eks-dev-policy
+aws iam attach-group-policy --group-name eks-test-team --policy-arn arn:aws:iam::ACCOUNT_ID:policy/eks-test-policy
+aws iam attach-group-policy --group-name eks-pre-prod-team --policy-arn arn:aws:iam::ACCOUNT_ID:policy/eks-pre-prod-policy
+aws iam attach-group-policy --group-name eks-prod-team --policy-arn arn:aws:iam::ACCOUNT_ID:policy/eks-prod-policy
+```
+
+### Step 8: Configure aws-auth ConfigMap
+Get the current aws-auth ConfigMap:
+```bash
+kubectl get configmap aws-auth -n kube-system -o yaml > aws-auth-configmap.yaml
+```
+
+Edit aws-auth-configmap.yaml and add the following under the `mapUsers` section:
+```yaml
+mapUsers: |
+  - userarn: arn:aws:iam::ACCOUNT_ID:user/dev-user1
+    username: dev-user1
+    groups:
+      - dev-team
+  - userarn: arn:aws:iam::ACCOUNT_ID:user/test-user1
+    username: test-user1
+    groups:
+      - test-team
+  - userarn: arn:aws:iam::ACCOUNT_ID:user/pre-prod-user1
+    username: pre-prod-user1
+    groups:
+      - pre-prod-team
+  - userarn: arn:aws:iam::ACCOUNT_ID:user/prod-user1
+    username: prod-user1
+    groups:
+      - prod-team
+```
+
+Apply the updated ConfigMap:
+```bash
+kubectl apply -f aws-auth-configmap.yaml
+```
+
+### Step 9: Create Kubernetes RBAC Resources
+Create a file named `multi-env-rbac.yaml`:
+
+```yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: dev
+  name: dev-role
+rules:
+- apiGroups: ["", "apps", "batch"]
+  resources: ["pods", "services", "deployments", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dev-role-binding
+  namespace: dev
+subjects:
+- kind: Group
+  name: dev-team
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: dev-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Repeat similar Role and RoleBinding for test, pre-prod, and prod namespaces
+```
+
+Apply the RBAC configuration:
+```bash
+kubectl apply -f multi-env-rbac.yaml
+```
+
+### Step 10: Configure kubectl for Users
+For each user, create access keys and configure kubectl:
+
+```bash
+aws iam create-access-key --user-name dev-user1
+aws configure --profile dev-user1
+aws eks get-token --cluster-name multi-env-cluster --region us-west-2 --profile dev-user1 > dev-token.txt
+kubectl config set-credentials dev-user1 --token=$(cat dev-token.txt)
+kubectl config set-context dev-context --cluster=multi-env-cluster --user=dev-user1 --namespace=dev
+```
+
+Repeat for other users.
+
+## Part 2: Self-Managed Kubernetes Setup
+
+### Step 1: Create Namespaces
+```bash
+kubectl create namespace dev
+kubectl create namespace test
+kubectl create namespace pre-prod
+kubectl create namespace production
+```
+
+### Step 2: Generate Private Keys for Users
+```bash
+openssl genrsa -out dev-user1.key 2048
+openssl genrsa -out test-user1.key 2048
+openssl genrsa -out pre-prod-user1.key 2048
+openssl genrsa -out prod-user1.key 2048
+```
+
+### Step 3: Create Certificate Signing Requests (CSRs)
+```bash
+openssl req -new -key dev-user1.key -out dev-user1.csr -subj "/CN=dev-user1/O=dev-team"
+openssl req -new -key test-user1.key -out test-user1.csr -subj "/CN=test-user1/O=test-team"
+openssl req -new -key pre-prod-user1.key -out pre-prod-user1.csr -subj "/CN=pre-prod-user1/O=pre-prod-team"
+openssl req -new -key prod-user1.key -out prod-user1.csr -subj "/CN=prod-user1/O=prod-team"
+```
+
+### Step 4: Sign CSRs with Kubernetes CA
+```bash
+openssl x509 -req -in dev-user1.csr -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kubernetes/pki/ca.key -CAcreateserial -out dev-user1.crt -days 365
+openssl x509 -req -in test-user1.csr -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kubernetes/pki/ca.key -CAcreateserial -out test-user1.crt -days 365
+openssl x509 -req -in pre-prod-user1.csr -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kubernetes/pki/ca.key -CAcreateserial -out pre-prod-user1.crt -days 365
+openssl x509 -req -in prod-user1.csr -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kubernetes/pki/ca.key -CAcreateserial -out prod-user1.crt -days 365
+```
+
+### Step 5: Create Kubernetes RBAC Resources
+Create a file named `self-managed-multi-env-rbac.yaml`:
+
+```yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: dev
+  name: dev-role
+rules:
+- apiGroups: ["", "apps", "batch"]
+  resources: ["pods", "services", "deployments", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dev-role-binding
+  namespace: dev
+subjects:
+- kind: User
+  name: dev-user1
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: dev-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Repeat similar Role and RoleBinding for test, pre-prod, and prod namespaces and users
+```
+
+Apply the RBAC configuration:
+```bash
+kubectl apply -f self-managed-multi-env-rbac.yaml
+```
+
+### Step 6: Configure kubectl for Users
+For each user, configure kubectl:
+
+```bash
+kubectl config set-credentials dev-user1 --client-certificate=dev-user1.crt --client-key=dev-user1.key
+kubectl config set-context dev-context --cluster=your-cluster-name --user=dev-user1 --namespace=dev
+```
+
+Repeat for other users.
+
+## User Access Example
+
+For a dev team user to access resources:
+
+1. Set the correct kubectl context:
+   ```bash
+   kubectl config use-context dev-context
+   ```
+
+2. Access resources in the dev namespace:
+   ```bash
+   kubectl get pods
+   kubectl get deployments
+   kubectl create deployment nginx --image=nginx
+   ```
+
+3. Attempt to access resources in other namespaces (should fail):
+   ```bash
+   kubectl get pods -n production
+   ```
+
+This setup ensures that users have appropriate access to their designated environments while being restricted from accessing others.
