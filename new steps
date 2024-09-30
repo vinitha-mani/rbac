@@ -1,0 +1,223 @@
+I understand you have a presentation today where you need to explain and demonstrate RBAC in EKS with IAM integration. As a fresher, you want a detailed, step-by-step guide to set up and validate the configuration for admin, developer, and production roles. I'll provide you with a comprehensive walkthrough that you can use for your hands-on demo. Let's go through this process from the beginning:
+
+1. Prerequisites:
+   - AWS CLI installed and configured with an IAM user that has sufficient permissions to create EKS clusters
+   - kubectl installed
+   - eksctl installed
+
+2. Create an EKS cluster:
+   ```bash
+   eksctl create cluster --name my-eks-cluster --region us-west-2 --node-type t3.medium --nodes 2
+   ```
+   This process will take about 15-20 minutes.
+
+3. Create IAM Users:
+   ```bash
+   aws iam create-user --user-name eks-admin
+   aws iam create-user --user-name eks-developer
+   aws iam create-user --user-name eks-production
+   ```
+
+4. Create IAM Policies:
+   Create a file named eks-console-access-policy.json with the following content:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "eks:*",
+           "ec2:DescribeInstances",
+           "ec2:DescribeNetworkInterfaces",
+           "ec2:DescribeSubnets",
+           "ec2:DescribeVpcs"
+         ],
+         "Resource": "*"
+       }
+     ]
+   }
+   ```
+
+   Create the policy:
+   ```bash
+   aws iam create-policy --policy-name EKSConsoleAccess --policy-document file://eks-console-access-policy.json
+   ```
+
+5. Attach policies to users:
+   ```bash
+   aws iam attach-user-policy --user-name eks-admin --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+   aws iam attach-user-policy --user-name eks-developer --policy-arn arn:aws:iam::<YOUR_ACCOUNT_ID>:policy/EKSConsoleAccess
+   aws iam attach-user-policy --user-name eks-production --policy-arn arn:aws:iam::<YOUR_ACCOUNT_ID>:policy/EKSConsoleAccess
+   ```
+
+6. Create access keys for each user:
+   ```bash
+   aws iam create-access-key --user-name eks-admin
+   aws iam create-access-key --user-name eks-developer
+   aws iam create-access-key --user-name eks-production
+   ```
+   Save the output for each user. You'll need these credentials later.
+
+7. Configure kubectl:
+   ```bash
+   aws eks get-token --cluster-name my-eks-cluster | kubectl apply -f -
+   ```
+
+8. Create Kubernetes RBAC configurations:
+   Create a file named rbac.yaml with the following content:
+   ```yaml
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRole
+   metadata:
+     name: eks-admin
+   rules:
+   - apiGroups: ["*"]
+     resources: ["*"]
+     verbs: ["*"]
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRoleBinding
+   metadata:
+     name: eks-admin
+   subjects:
+   - kind: User
+     name: eks-admin
+     apiGroup: rbac.authorization.k8s.io
+   roleRef:
+     kind: ClusterRole
+     name: eks-admin
+     apiGroup: rbac.authorization.k8s.io
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: Role
+   metadata:
+     namespace: default
+     name: eks-developer
+   rules:
+   - apiGroups: ["", "apps", "batch"]
+     resources: ["pods", "services", "deployments", "jobs"]
+     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: RoleBinding
+   metadata:
+     name: eks-developer
+     namespace: default
+   subjects:
+   - kind: User
+     name: eks-developer
+     apiGroup: rbac.authorization.k8s.io
+   roleRef:
+     kind: Role
+     name: eks-developer
+     apiGroup: rbac.authorization.k8s.io
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: Role
+   metadata:
+     namespace: default
+     name: eks-production
+   rules:
+   - apiGroups: ["", "apps"]
+     resources: ["pods", "services", "deployments"]
+     verbs: ["get", "list", "watch"]
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: RoleBinding
+   metadata:
+     name: eks-production
+     namespace: default
+   subjects:
+   - kind: User
+     name: eks-production
+     apiGroup: rbac.authorization.k8s.io
+   roleRef:
+     kind: Role
+     name: eks-production
+     apiGroup: rbac.authorization.k8s.io
+   ```
+
+   Apply the RBAC configuration:
+   ```bash
+   kubectl apply -f rbac.yaml
+   ```
+
+9. Update the aws-auth ConfigMap:
+   ```bash
+   kubectl edit configmap aws-auth -n kube-system
+   ```
+   Add the following under the `mapUsers` section:
+   ```yaml
+   mapUsers: |
+     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-admin
+       username: eks-admin
+       groups:
+         - system:masters
+     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-developer
+       username: eks-developer
+     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-production
+       username: eks-production
+   ```
+
+10. Configure AWS CLI profiles:
+    Edit ~/.aws/credentials and add:
+    ```
+    [eks-admin]
+    aws_access_key_id = <ADMIN_ACCESS_KEY>
+    aws_secret_access_key = <ADMIN_SECRET_KEY>
+
+    [eks-developer]
+    aws_access_key_id = <DEVELOPER_ACCESS_KEY>
+    aws_secret_access_key = <DEVELOPER_SECRET_KEY>
+
+    [eks-production]
+    aws_access_key_id = <PRODUCTION_ACCESS_KEY>
+    aws_secret_access_key = <PRODUCTION_SECRET_KEY>
+    ```
+
+11. Update kubeconfig for each profile:
+    ```bash
+    aws eks get-token --cluster-name my-eks-cluster --profile eks-admin | kubectl apply -f -
+    aws eks get-token --cluster-name my-eks-cluster --profile eks-developer | kubectl apply -f -
+    aws eks get-token --cluster-name my-eks-cluster --profile eks-production | kubectl apply -f -
+    ```
+
+12. Validation:
+    Test each role by switching AWS profiles and running kubectl commands:
+
+    Admin:
+    ```bash
+    export AWS_PROFILE=eks-admin
+    kubectl get pods --all-namespaces
+    kubectl create deployment nginx --image=nginx
+    ```
+
+    Developer:
+    ```bash
+    export AWS_PROFILE=eks-developer
+    kubectl get pods
+    kubectl create deployment nginx-dev --image=nginx
+    ```
+
+    Production:
+    ```bash
+    export AWS_PROFILE=eks-production
+    kubectl get pods
+    kubectl create deployment nginx-prod --image=nginx
+    ```
+
+    The admin should be able to perform all operations. The developer should be able to create deployments in the default namespace. The production user should only be able to view resources in the default namespace.
+
+This setup demonstrates a complete RBAC configuration in EKS with IAM integration. It shows how different IAM users are mapped to Kubernetes RBAC roles, providing varying levels of access within the cluster.
+
+For your presentation, you can walk through each step, explaining the purpose of each configuration. Highlight how IAM users are created and given EKS access, how Kubernetes RBAC roles are defined, and how the aws-auth ConfigMap bridges IAM and Kubernetes RBAC.
+
+Remember to clean up your AWS resources after the presentation to avoid unnecessary charges:
+
+```bash
+eksctl delete cluster --name my-eks-cluster --region us-west-2
+```
+
+This comprehensive guide should provide you with a solid foundation for your presentation and hands-on demo. Good luck!
