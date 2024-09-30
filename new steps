@@ -1,223 +1,478 @@
-I understand you have a presentation today where you need to explain and demonstrate RBAC in EKS with IAM integration. As a fresher, you want a detailed, step-by-step guide to set up and validate the configuration for admin, developer, and production roles. I'll provide you with a comprehensive walkthrough that you can use for your hands-on demo. Let's go through this process from the beginning:
+RBAC is a method for regulating access to resources based on the roles of individual users within an organization.
+In Kubernetes, RBAC is essential for controlling access to the Kubernetes API and resources like pods, services, and namespaces.
 
-1. Prerequisites:
-   - AWS CLI installed and configured with an IAM user that has sufficient permissions to create EKS clusters
-   - kubectl installed
-   - eksctl installed
+Components: Explain the key components of RBAC in Kubernetes:
+   Roles: Define a set of permissions within a namespace.
+   RoleBindings: Bind a role to a user or Service Account within a specific namespace.
+   ClusterRoles: Similar to Roles, but apply across all namespaces.
+   ClusterRoleBindings: Bind ClusterRoles to users or Service Accounts at the cluster level.
 
-2. Create an EKS cluster:
-   ```bash
-   eksctl create cluster --name my-eks-cluster --region us-west-2 --node-type t3.medium --nodes 2
-   ```
-   This process will take about 15-20 minutes.
+AWS IAM: IAM allows you to manage access to AWS services and resources securely.
+   Authentication: EKS uses IAM for authenticating users and applications accessing the Kubernetes API.
+   Security Best Practices: Aligning IAM with RBAC ensures that users have the necessary permissions to perform their duties without over-provisioning access.
 
-3. Create IAM Users:
-   ```bash
-   aws iam create-user --user-name eks-admin
-   aws iam create-user --user-name eks-developer
-   aws iam create-user --user-name eks-production
-   ```
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa
+ls ~/.ssh/id_rsa*
 
-4. Create IAM Policies:
-   Create a file named eks-console-access-policy.json with the following content:
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Action": [
-           "eks:*",
-           "ec2:DescribeInstances",
-           "ec2:DescribeNetworkInterfaces",
-           "ec2:DescribeSubnets",
-           "ec2:DescribeVpcs"
-         ],
-         "Resource": "*"
-       }
-     ]
-   }
-   ```
-
-   Create the policy:
-   ```bash
-   aws iam create-policy --policy-name EKSConsoleAccess --policy-document file://eks-console-access-policy.json
-   ```
-
-5. Attach policies to users:
-   ```bash
-   aws iam attach-user-policy --user-name eks-admin --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
-   aws iam attach-user-policy --user-name eks-developer --policy-arn arn:aws:iam::<YOUR_ACCOUNT_ID>:policy/EKSConsoleAccess
-   aws iam attach-user-policy --user-name eks-production --policy-arn arn:aws:iam::<YOUR_ACCOUNT_ID>:policy/EKSConsoleAccess
-   ```
-
-6. Create access keys for each user:
-   ```bash
-   aws iam create-access-key --user-name eks-admin
-   aws iam create-access-key --user-name eks-developer
-   aws iam create-access-key --user-name eks-production
-   ```
-   Save the output for each user. You'll need these credentials later.
-
-7. Configure kubectl:
-   ```bash
-   aws eks get-token --cluster-name my-eks-cluster | kubectl apply -f -
-   ```
-
-8. Create Kubernetes RBAC configurations:
-   Create a file named rbac.yaml with the following content:
-   ```yaml
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: ClusterRole
-   metadata:
-     name: eks-admin
-   rules:
-   - apiGroups: ["*"]
-     resources: ["*"]
-     verbs: ["*"]
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: ClusterRoleBinding
-   metadata:
-     name: eks-admin
-   subjects:
-   - kind: User
-     name: eks-admin
-     apiGroup: rbac.authorization.k8s.io
-   roleRef:
-     kind: ClusterRole
-     name: eks-admin
-     apiGroup: rbac.authorization.k8s.io
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: Role
-   metadata:
-     namespace: default
-     name: eks-developer
-   rules:
-   - apiGroups: ["", "apps", "batch"]
-     resources: ["pods", "services", "deployments", "jobs"]
-     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: RoleBinding
-   metadata:
-     name: eks-developer
-     namespace: default
-   subjects:
-   - kind: User
-     name: eks-developer
-     apiGroup: rbac.authorization.k8s.io
-   roleRef:
-     kind: Role
-     name: eks-developer
-     apiGroup: rbac.authorization.k8s.io
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: Role
-   metadata:
-     namespace: default
-     name: eks-production
-   rules:
-   - apiGroups: ["", "apps"]
-     resources: ["pods", "services", "deployments"]
-     verbs: ["get", "list", "watch"]
-   ---
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: RoleBinding
-   metadata:
-     name: eks-production
-     namespace: default
-   subjects:
-   - kind: User
-     name: eks-production
-     apiGroup: rbac.authorization.k8s.io
-   roleRef:
-     kind: Role
-     name: eks-production
-     apiGroup: rbac.authorization.k8s.io
-   ```
-
-   Apply the RBAC configuration:
-   ```bash
-   kubectl apply -f rbac.yaml
-   ```
-
-9. Update the aws-auth ConfigMap:
-   ```bash
-   kubectl edit configmap aws-auth -n kube-system
-   ```
-   Add the following under the `mapUsers` section:
-   ```yaml
-   mapUsers: |
-     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-admin
-       username: eks-admin
-       groups:
-         - system:masters
-     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-developer
-       username: eks-developer
-     - userarn: arn:aws:iam::<YOUR_ACCOUNT_ID>:user/eks-production
-       username: eks-production
-   ```
-
-10. Configure AWS CLI profiles:
-    Edit ~/.aws/credentials and add:
-    ```
-    [eks-admin]
-    aws_access_key_id = <ADMIN_ACCESS_KEY>
-    aws_secret_access_key = <ADMIN_SECRET_KEY>
-
-    [eks-developer]
-    aws_access_key_id = <DEVELOPER_ACCESS_KEY>
-    aws_secret_access_key = <DEVELOPER_SECRET_KEY>
-
-    [eks-production]
-    aws_access_key_id = <PRODUCTION_ACCESS_KEY>
-    aws_secret_access_key = <PRODUCTION_SECRET_KEY>
-    ```
-
-11. Update kubeconfig for each profile:
-    ```bash
-    aws eks get-token --cluster-name my-eks-cluster --profile eks-admin | kubectl apply -f -
-    aws eks get-token --cluster-name my-eks-cluster --profile eks-developer | kubectl apply -f -
-    aws eks get-token --cluster-name my-eks-cluster --profile eks-production | kubectl apply -f -
-    ```
-
-12. Validation:
-    Test each role by switching AWS profiles and running kubectl commands:
-
-    Admin:
-    ```bash
-    export AWS_PROFILE=eks-admin
-    kubectl get pods --all-namespaces
-    kubectl create deployment nginx --image=nginx
-    ```
-
-    Developer:
-    ```bash
-    export AWS_PROFILE=eks-developer
-    kubectl get pods
-    kubectl create deployment nginx-dev --image=nginx
-    ```
-
-    Production:
-    ```bash
-    export AWS_PROFILE=eks-production
-    kubectl get pods
-    kubectl create deployment nginx-prod --image=nginx
-    ```
-
-    The admin should be able to perform all operations. The developer should be able to create deployments in the default namespace. The production user should only be able to view resources in the default namespace.
-
-This setup demonstrates a complete RBAC configuration in EKS with IAM integration. It shows how different IAM users are mapped to Kubernetes RBAC roles, providing varying levels of access within the cluster.
-
-For your presentation, you can walk through each step, explaining the purpose of each configuration. Highlight how IAM users are created and given EKS access, how Kubernetes RBAC roles are defined, and how the aws-auth ConfigMap bridges IAM and Kubernetes RBAC.
-
-Remember to clean up your AWS resources after the presentation to avoid unnecessary charges:
-
-```bash
-eksctl delete cluster --name my-eks-cluster --region us-west-2
+Create the EKS cluster:
+```
+eksctl create cluster \
+  --name=my-eks-cluster \
+  --region=us-east-1 \
+  --vpc-private-subnets=subnet-0d6aa917954045829,subnet-0543a2ca8849addcb \
+  --nodegroup-name=my-nodes \
+  --node-type=t2.medium \
+  --nodes=2 \
+  --nodes-min=1 \
+  --nodes-max=4 \
+  --node-volume-size=20 \
+  --ssh-access \
+  --ssh-public-key=<your-ssh-key> \
+  --managed
 ```
 
-This comprehensive guide should provide you with a solid foundation for your presentation and hands-on demo. Good luck!
+Set up IAM users and roles
+
+Create IAM users:
+```
+aws iam create-user --user-name eks-admin
+aws iam create-user --user-name eks-developer
+aws iam create-user --user-name eks-production
+```
+Create IAM policies:
+
+Admin Policy:
+```
+cat << EOF > admin-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "eks:*",
+                "ec2:*"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+
+aws iam create-policy --policy-name eks-admin-policy --policy-document file://admin-policy.json
+```
+
+Developer Policy:
+```
+cat << EOF > developer-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "eks:ListEksAnywhereSubscriptions",
+                "eks:DescribeFargateProfile",
+                "eks:ListTagsForResource",
+                "eks:DescribeInsight",
+                "eks:ListAccessEntries",
+                "eks:ListAddons",
+                "eks:DescribeEksAnywhereSubscription",
+                "eks:DescribeAddon",
+                "eks:ListAssociatedAccessPolicies",
+                "eks:DescribeNodegroup",
+                "eks:ListUpdates",
+                "eks:DescribeAddonVersions",
+                "eks:ListIdentityProviderConfigs",
+                "eks:ListNodegroups",
+                "eks:DescribeAddonConfiguration",
+                "eks:DescribeAccessEntry",
+                "eks:DescribePodIdentityAssociation",
+                "eks:ListInsights",
+                "eks:ListPodIdentityAssociations",
+                "eks:ListFargateProfiles",
+                "eks:DescribeIdentityProviderConfig",
+                "eks:DescribeUpdate",
+                "eks:AccessKubernetesApi",
+                "eks:DescribeCluster",
+                "eks:ListClusters",
+                "eks:ListAccessPolicies"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+
+aws iam create-policy --policy-name eks-developer-policy --policy-document file://developer-policy.json
+```
+
+Production Policy:
+```
+cat << EOF > production-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "eks:DescribeCluster",
+                "eks:ListClusters",
+                "eks:DescribeNodegroup",
+                "eks:ListNodegroups",
+                "eks:ListUpdates",
+                "eks:AccessKubernetesApi",
+                "eks:UpdateClusterVersion",
+                "eks:UpdateNodegroupVersion",
+                "eks:ListEksAnywhereSubscriptions",
+                "eks:DescribeFargateProfile",
+                "eks:ListTagsForResource",
+                "eks:DescribeInsight",
+                "eks:ListAccessEntries",
+                "eks:ListAddons",
+                "eks:DescribeEksAnywhereSubscription",
+                "eks:DescribeAddon",
+                "eks:ListAssociatedAccessPolicies",
+                "eks:DescribeNodegroup",
+                "eks:ListUpdates",
+                "eks:DescribeAddonVersions",
+                "eks:ListIdentityProviderConfigs",
+                "eks:ListNodegroups",
+                "eks:DescribeAddonConfiguration",
+                "eks:DescribeAccessEntry",
+                "eks:DescribePodIdentityAssociation",
+                "eks:ListInsights",
+                "eks:ListPodIdentityAssociations",
+                "eks:ListFargateProfiles",
+                "eks:DescribeIdentityProviderConfig",
+                "eks:DescribeUpdate",
+                "eks:AccessKubernetesApi",
+                "eks:DescribeCluster",
+                "eks:ListClusters",
+                "eks:ListAccessPolicies"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+
+aws iam create-policy --policy-name eks-production-policy --policy-document file://production-policy.json
+```
+
+These policies define what actions each role can perform on AWS resources. The admin has full access to EKS and EC2, the developer has read-only access, and production has additional permissions for updates.
+
+Attach policies to users:
+```
+aws iam attach-user-policy --user-name eks-admin --policy-arn $(aws iam list-policies --query 'Policies[?PolicyName==`eks-admin-policy`].Arn' --output text)
+aws iam attach-user-policy --user-name eks-developer --policy-arn $(aws iam list-policies --query 'Policies[?PolicyName==`eks-developer-policy`].Arn' --output text)
+aws iam attach-user-policy --user-name eks-production --policy-arn $(aws iam list-policies --query 'Policies[?PolicyName==`eks-production-policy`].Arn' --output text)
+```
+
+This attaches the policies we created to the corresponding IAM users.
+
+Configure Kubernetes RBAC
+
+Create namespaces:
+```
+kubectl create namespace development
+kubectl create namespace production
+```
+
+Namespaces provide a way to divide cluster resources between multiple users or projects.
+
+Create Kubernetes roles and role bindings:
+
+Admin ClusterRole and ClusterRoleBinding:
+```
+cat << EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eks-admin-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eks-admin-binding
+subjects:
+- kind: User
+  name: eks-admin
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: eks-admin-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+Developer Role and RoleBinding:
+```
+cat << EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: eks-developer-role
+rules:
+- apiGroups: ["", "apps", "batch"]
+  resources: ["pods", "services", "deployments", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eks-developer-binding
+  namespace: development
+subjects:
+- kind: User
+  name: eks-developer
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: eks-developer-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+Production Role and RoleBinding:
+```
+cat << EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: production
+  name: eks-production-role
+rules:
+- apiGroups: ["", "apps", "batch"]
+  resources: ["pods", "services", "deployments", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eks-production-binding
+  namespace: production
+subjects:
+- kind: User
+  name: eks-production
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: eks-production-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+Explanation:
+- ClusterRole: Defines permissions across the entire cluster.
+- Role: Defines permissions within a specific namespace.
+- ClusterRoleBinding: Binds a ClusterRole to a user, giving them cluster-wide permissions.
+- RoleBinding: Binds a Role to a user, giving them permissions within a specific namespace.
+
+The admin has full access across the cluster, while developers and production users have specific permissions within their respective namespaces.
+
+Configure aws-auth ConfigMap
+
+Edit the aws-auth ConfigMap:
+```
+kubectl edit configmap aws-auth -n kube-system
+```
+
+Add the following under the `mapUsers` section:
+```yaml
+mapUsers: |
+  - userarn: arn:aws:iam::<YOUR-ACCOUNT-ID>:user/eks-admin
+    username: eks-admin
+    groups:
+      - system:masters
+  - userarn: arn:aws:iam::<YOUR-ACCOUNT-ID>:user/eks-developer
+    username: eks-developer
+  - userarn: arn:aws:iam::<YOUR-ACCOUNT-ID>:user/eks-production
+    username: eks-production
+```
+
+The aws-auth ConfigMap maps IAM users to Kubernetes users and groups, allowing them to authenticate against the Kubernetes API. This step is crucial for integrating AWS IAM with Kubernetes RBAC.
+
+vi ~/.aws/credentials
+[eks-admin]
+aws_access_key_id = AKIA5FTY7SRWPZOROZQO
+aws_secret_access_key = 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
+region = us-east-1
+
+aws eks update-kubeconfig --name my-eks-cluster --region us-east-1 --profile eks-admin
+
+aws eks update-kubeconfig --name my-eks-cluster --region us-east-1 --profile eks-developer
+
+aws eks update-kubeconfig --name my-eks-cluster --region us-east-1 --profile eks-production
+
+Validation
+
+Configure kubectl for different users:
+
+For admin:
+```
+aws eks get-token --cluster-name my-eks-cluster --region us-west-2 --profile eks-admin 
+```
+
+For developer:
+```
+aws eks get-token --cluster-name my-eks-cluster --region us-west-2 --profile eks-developer 
+```
+
+For production:
+```
+aws eks get-token --cluster-name my-eks-cluster --region us-west-2 --profile eks-production
+```
+aws sts get-caller-identity
+
+export AWS_PROFILE=eks-admin
+
+Test permissions:
+
+As admin:
+```
+kubectl get nodes
+kubectl get pods --all-namespaces
+```
+
+As developer:
+```
+kubectl get pods -n development
+kubectl get pods -n production  # This should fail
+kubectl get pods --all-namespaces # This should fail
+```
+
+As production:
+```
+kubectl get pods -n production
+kubectl get nodes  # This should work
+kubectl get pods --all-namespaces  # This should fail
+```
+
+Explanation: These tests verify that each user has the correct permissions as defined by our RBAC setup.
+
+Service Accounts:
+   Service Accounts are used for processes running in pods to authenticate with the Kubernetes API. They're useful for giving specific permissions to applications running in your cluster.
+
+Pod-view-logger
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: <your-namespace>  
+  name: view-logs
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: view-logs-binding
+  namespace: <your-namespace>  
+subjects:
+  - kind: User  
+    name: <your-user-name> 
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: view-logs
+  apiGroup: rbac.authorization.k8s.io
+
+
+Monitoring Access to Nodes
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-viewer
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: node-viewer-binding
+subjects:
+  - kind: Group
+    name: monitoring-team  
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: node-viewer
+  apiGroup: rbac.authorization.k8s.io
+
+
+
+Examples for sa
+
+Create a Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-sa
+  namespace: argocd  # Replace with your namespace
+
+
+Create a Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: argocd
+  name: argocd-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "deployments", "services", "secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+
+
+Create a RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-role-binding
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: argocd-sa
+    namespace: argocd
+roleRef:
+  kind: Role
+  name: argocd-role
+  apiGroup: rbac.authorization.k8s.io
+
+Deploy Argo CD Using the Service Account
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: argocd-server
+  template:
+    metadata:
+      labels:
+        app: argocd-server
+    spec:
+      serviceAccountName: argocd-sa  
+      containers:
+        - name: argocd-server
+          image: argoproj/argocd:v2.1.0  
+          ports:
+            - containerPort: 8080
+
+
+
